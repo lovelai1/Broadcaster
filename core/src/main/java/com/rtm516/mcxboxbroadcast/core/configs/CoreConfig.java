@@ -125,9 +125,19 @@ public interface CoreConfig {
         @DefaultBoolean(true)
         boolean autoUnfollow();
 
-        @Comment("Should we automatically send invites to friends every 3 seconds")
+        @Comment("Should we automatically send periodic invites to friends")
         @DefaultBoolean(true)
         boolean initialInvite();
+
+        @Comment("How often to send invite attempts in seconds")
+        @DefaultNumeric(3)
+        @NumericRange(from = 1, to = Integer.MAX_VALUE)
+        int inviteIntervalSeconds();
+
+        @Comment("Minimum time in seconds before re-inviting the same friend")
+        @DefaultNumeric(0)
+        @NumericRange(from = 0, to = Integer.MAX_VALUE)
+        int inviteCooldownSeconds();
 
         @Comment("Friend expiry settings")
         ExpiryConfig expiry();

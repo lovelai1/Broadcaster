@@ -20,6 +20,7 @@ import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,6 +41,9 @@ public class FriendManager {
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
     private int autoInviteIndex;
+    private int autoInviteIntervalSeconds = 3;
+    private int autoInviteCooldownSeconds = 0;
+    private final Map<String, Instant> lastInviteTimes = new HashMap<>();
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -210,6 +214,8 @@ public class FriendManager {
     public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
         shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
         this.initialInvite = friendSyncConfig.initialInvite();
+        this.autoInviteIntervalSeconds = friendSyncConfig.inviteIntervalSeconds();
+        this.autoInviteCooldownSeconds = friendSyncConfig.inviteCooldownSeconds();
 
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
@@ -325,6 +331,11 @@ public class FriendManager {
                     return;
                 }
 
+                Set<String> friendXuids = new HashSet<>();
+                friends.forEach(person -> friendXuids.add(person.xuid));
+                lastInviteTimes.keySet().removeIf(xuid -> !friendXuids.contains(xuid));
+
+                Instant now = Instant.now();
                 for (int attempts = 0; attempts < friends.size(); attempts++) {
                     if (autoInviteIndex >= friends.size()) {
                         autoInviteIndex = 0;
@@ -337,13 +348,20 @@ public class FriendManager {
                         continue;
                     }
 
+                    Instant lastInvite = lastInviteTimes.get(person.xuid);
+                    if (lastInvite != null
+                        && now.isBefore(lastInvite.plusSeconds(autoInviteCooldownSeconds))) {
+                        continue;
+                    }
+
                     sendInvite(person.xuid);
+                    lastInviteTimes.put(person.xuid, now);
                     break;
                 }
             } catch (Exception e) {
                 logger.error("Failed to send periodic invites", e);
             }
-        }, 0, 3, TimeUnit.SECONDS);
+        }, 0, autoInviteIntervalSeconds, TimeUnit.SECONDS);
     }
 
     /**
