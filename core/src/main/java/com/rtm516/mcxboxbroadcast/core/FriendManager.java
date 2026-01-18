@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class FriendManager {
+    private static final long INVITE_INTERVAL_SECONDS = 3;
     private final HttpClient httpClient;
     private final Logger logger;
     private final SessionManagerCore sessionManager;
@@ -212,6 +213,9 @@ public class FriendManager {
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
 
+        // Initialize the auto invite loop if enabled
+        initAutoInvite();
+
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
@@ -309,6 +313,25 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initAutoInvite() {
+        if (!initialInvite) {
+            return;
+        }
+
+        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                for (FollowerResponse.Person person : lastFriendCache()) {
+                    if (isGuestAccount(person.xuid)) {
+                        continue;
+                    }
+                    sendInvite(person.xuid, person.gamertag);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to send periodic invites", e);
+            }
+        }, 0, INVITE_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     /**
@@ -589,6 +612,22 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
+        sendInvite(xuid, lookupGamertag(xuid));
+    }
+
+    private String lookupGamertag(String xuid) {
+        if (lastFriendCache == null) {
+            return null;
+        }
+
+        return lastFriendCache.stream()
+            .filter(person -> person.xuid.equals(xuid))
+            .map(person -> person.gamertag)
+            .findFirst()
+            .orElse(null);
+    }
+
+    private void sendInvite(String xuid, String gamertag) {
         // Only invite if enabled
         if (!initialInvite) {
             return;
@@ -615,7 +654,16 @@ public class FriendManager {
                 .build();
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
-            logger.debug(inviteResponse.body());
+            if (inviteResponse.statusCode() >= 200 && inviteResponse.statusCode() < 300) {
+                if (gamertag == null || gamertag.isBlank()) {
+                    logger.info("Sent invite to " + xuid);
+                } else {
+                    logger.info("Sent invite to " + gamertag + " (" + xuid + ")");
+                }
+                logger.debug(inviteResponse.body());
+            } else {
+                logger.warn("Failed to send invite to " + xuid + ": (" + inviteResponse.statusCode() + ") " + inviteResponse.body());
+            }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
