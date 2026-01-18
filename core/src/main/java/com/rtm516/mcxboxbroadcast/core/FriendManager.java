@@ -37,7 +37,7 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
-    private boolean initialInvite;
+    private Future<?> inviteLoopFuture;
     private boolean shouldAcceptPendingRequests = true;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
@@ -212,6 +212,9 @@ public class FriendManager {
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
 
+        // Initialize the auto invite loop if enabled
+        initAutoInviteLoop(friendSyncConfig);
+
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
@@ -284,7 +287,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +311,56 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    /**
+     * Set up a scheduled task to automatically invite online users
+     *
+     * @param friendSyncConfig The config to use for the auto invite loop
+     */
+    private void initAutoInviteLoop(CoreConfig.FriendSyncConfig friendSyncConfig) {
+        if (!friendSyncConfig.initialInvite()) {
+            return;
+        }
+
+        if (inviteLoopFuture != null && !inviteLoopFuture.isDone()) {
+            return;
+        }
+
+        inviteLoopFuture = sessionManager.scheduledThread().submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                boolean invitedSomeone = false;
+                try {
+                    List<FollowerResponse.Person> people = get();
+                    for (FollowerResponse.Person person : people) {
+                        if (!isAvailable(person)) {
+                            continue;
+                        }
+
+                        sendInvite(person.xuid, getDisplayName(person));
+                        invitedSomeone = true;
+
+                        try {
+                            TimeUnit.SECONDS.sleep(10);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                } catch (XboxFriendsException e) {
+                    logger.error("Failed to load people for auto-invite", e);
+                }
+
+                if (!invitedSomeone) {
+                    try {
+                        TimeUnit.SECONDS.sleep(10);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /**
@@ -373,8 +425,6 @@ public class FriendManager {
 
                         // Let the user know we added a friend
                         logger.info("Added " + entry.getValue() + " (" + entry.getKey() + ") as a friend");
-                        sendInvite(entry.getKey());
-
                         // Update the user in the cache
                         Optional<FollowerResponse.Person> friend = lastFriendCache.stream().filter(p -> p.xuid.equals(entry.getKey())).findFirst();
                         friend.ifPresent(person -> person.isFollowedByCaller = true);
@@ -576,7 +626,6 @@ public class FriendManager {
                     continue;
                 }
                 logger.info("Added " + friend.get().gamertag + " (" + xuid + ") as a friend");
-                sendInvite(xuid);
             }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to accept friend requests", e);
@@ -587,13 +636,9 @@ public class FriendManager {
      * Send an invite to a given xuid for the current game session
      *
      * @param xuid The XUID of the user to invite
+     * @param username The username of the user to invite
      */
-    public void sendInvite(String xuid) {
-        // Only invite if enabled
-        if (!initialInvite) {
-            return;
-        }
-
+    public void sendInvite(String xuid, String username) {
         try {
             CreateHandleRequest createHandleContent = new CreateHandleRequest(
                 1,
@@ -616,8 +661,25 @@ public class FriendManager {
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
             logger.debug(inviteResponse.body());
+            logger.info("Invited " + username);
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
+    }
+
+    private boolean isAvailable(FollowerResponse.Person person) {
+        return person.presenceState != null && !"Offline".equalsIgnoreCase(person.presenceState);
+    }
+
+    private String getDisplayName(FollowerResponse.Person person) {
+        if (person.gamertag != null && !person.gamertag.isBlank()) {
+            return person.gamertag;
+        }
+
+        if (person.displayName != null && !person.displayName.isBlank()) {
+            return person.displayName;
+        }
+
+        return person.xuid;
     }
 }
