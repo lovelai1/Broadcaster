@@ -37,8 +37,10 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
+    private Future<?> inviteScheduledFuture;
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
+    private int inviteIndex = 0;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -212,6 +214,11 @@ public class FriendManager {
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
 
+        // Initialize auto invite loop if enabled
+        if (friendSyncConfig.initialInvite()) {
+            initAutoInviteLoop();
+        }
+
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
@@ -373,7 +380,7 @@ public class FriendManager {
 
                         // Let the user know we added a friend
                         logger.info("Added " + entry.getValue() + " (" + entry.getKey() + ") as a friend");
-                        sendInvite(entry.getKey());
+                        sendInvite(entry.getKey(), entry.getValue());
 
                         // Update the user in the cache
                         Optional<FollowerResponse.Person> friend = lastFriendCache.stream().filter(p -> p.xuid.equals(entry.getKey())).findFirst();
@@ -576,10 +583,62 @@ public class FriendManager {
                     continue;
                 }
                 logger.info("Added " + friend.get().gamertag + " (" + xuid + ") as a friend");
-                sendInvite(xuid);
+                sendInvite(xuid, friend.get().gamertag);
             }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to accept friend requests", e);
+        }
+    }
+
+    private void initAutoInviteLoop() {
+        if (inviteScheduledFuture != null && !inviteScheduledFuture.isDone()) {
+            return;
+        }
+
+        inviteScheduledFuture = sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                sendInviteToNextFriend();
+            } catch (Exception e) {
+                logger.error("Failed to send periodic invite", e);
+            }
+        }, 3, 3, TimeUnit.SECONDS);
+    }
+
+    private void sendInviteToNextFriend() {
+        if (!initialInvite) {
+            return;
+        }
+
+        List<FollowerResponse.Person> friends = lastFriendCache;
+        if (friends == null || inviteIndex >= friends.size()) {
+            try {
+                friends = get();
+            } catch (XboxFriendsException e) {
+                logger.error("Failed to refresh friends for invites", e);
+                return;
+            }
+        }
+
+        if (friends.isEmpty()) {
+            return;
+        }
+
+        int attempts = 0;
+        while (attempts < friends.size()) {
+            if (inviteIndex >= friends.size()) {
+                inviteIndex = 0;
+            }
+
+            FollowerResponse.Person person = friends.get(inviteIndex);
+            inviteIndex++;
+            attempts++;
+
+            if (isGuestAccount(person.xuid)) {
+                continue;
+            }
+
+            sendInvite(person.xuid, person.gamertag);
+            return;
         }
     }
 
@@ -589,6 +648,10 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
+        sendInvite(xuid, null);
+    }
+
+    public void sendInvite(String xuid, String gamertag) {
         // Only invite if enabled
         if (!initialInvite) {
             return;
@@ -616,6 +679,11 @@ public class FriendManager {
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
             logger.debug(inviteResponse.body());
+            if (gamertag == null || gamertag.isBlank()) {
+                logger.info("Invited " + xuid + " to the session");
+            } else {
+                logger.info("Invited " + gamertag + " (" + xuid + ") to the session");
+            }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
