@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -37,7 +38,6 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
-    private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
@@ -212,6 +212,9 @@ public class FriendManager {
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
 
+        // Initialize the auto invite loop
+        initAutoInviteLoop();
+
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
@@ -284,7 +287,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +311,50 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initAutoInviteLoop() {
+        sessionManager.scheduledThread().submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                List<FollowerResponse.Person> people;
+                try {
+                    people = get();
+                } catch (XboxFriendsException e) {
+                    logger.error("Failed to get people list for auto-invite", e);
+                    try {
+                        Thread.sleep(TimeUnit.SECONDS.toMillis(10));
+                    } catch (InterruptedException interruptedException) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    continue;
+                }
+
+                for (FollowerResponse.Person person : people) {
+                    if (!isOnline(person)) {
+                        continue;
+                    }
+
+                    sendInvite(person.xuid);
+                    logger.info("Invited " + person.gamertag);
+
+                    try {
+                        Thread.sleep(TimeUnit.SECONDS.toMillis(10));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    private boolean isOnline(FollowerResponse.Person person) {
+        if (person.presenceState == null) {
+            return false;
+        }
+        String state = person.presenceState.toLowerCase(Locale.ROOT);
+        return state.equals("online") || state.equals("available");
     }
 
     /**
@@ -373,7 +419,6 @@ public class FriendManager {
 
                         // Let the user know we added a friend
                         logger.info("Added " + entry.getValue() + " (" + entry.getKey() + ") as a friend");
-                        sendInvite(entry.getKey());
 
                         // Update the user in the cache
                         Optional<FollowerResponse.Person> friend = lastFriendCache.stream().filter(p -> p.xuid.equals(entry.getKey())).findFirst();
@@ -576,7 +621,6 @@ public class FriendManager {
                     continue;
                 }
                 logger.info("Added " + friend.get().gamertag + " (" + xuid + ") as a friend");
-                sendInvite(xuid);
             }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to accept friend requests", e);
@@ -589,11 +633,6 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
-        // Only invite if enabled
-        if (!initialInvite) {
-            return;
-        }
-
         try {
             CreateHandleRequest createHandleContent = new CreateHandleRequest(
                 1,
