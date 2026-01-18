@@ -669,6 +669,16 @@ public class FriendManager {
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
             logger.debug(inviteResponse.body());
+            String gamertag = "Unknown";
+            if (lastFriendCache != null) {
+                Optional<FollowerResponse.Person> friend = lastFriendCache.stream()
+                    .filter(person -> person.xuid.equals(xuid))
+                    .findFirst();
+                if (friend.isPresent()) {
+                    gamertag = friend.get().gamertag;
+                }
+            }
+            logger.info("Sent invite to " + gamertag + " (" + xuid + ")");
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
