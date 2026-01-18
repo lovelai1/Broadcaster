@@ -37,7 +37,7 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
-    private boolean initialInvite;
+    private Future<?> inviteLoopFuture;
     private boolean shouldAcceptPendingRequests = true;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
@@ -214,6 +214,7 @@ public class FriendManager {
 
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
+        startInviteLoop();
 
         if (!friendSyncConfig.expiry().enabled()) return;
 
@@ -284,7 +285,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -373,7 +373,6 @@ public class FriendManager {
 
                         // Let the user know we added a friend
                         logger.info("Added " + entry.getValue() + " (" + entry.getKey() + ") as a friend");
-                        sendInvite(entry.getKey());
 
                         // Update the user in the cache
                         Optional<FollowerResponse.Person> friend = lastFriendCache.stream().filter(p -> p.xuid.equals(entry.getKey())).findFirst();
@@ -576,7 +575,6 @@ public class FriendManager {
                     continue;
                 }
                 logger.info("Added " + friend.get().gamertag + " (" + xuid + ") as a friend");
-                sendInvite(xuid);
             }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to accept friend requests", e);
@@ -589,11 +587,6 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
-        // Only invite if enabled
-        if (!initialInvite) {
-            return;
-        }
-
         try {
             CreateHandleRequest createHandleContent = new CreateHandleRequest(
                 1,
@@ -619,5 +612,60 @@ public class FriendManager {
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
+    }
+
+    private void startInviteLoop() {
+        if (inviteLoopFuture != null && !inviteLoopFuture.isDone()) {
+            return;
+        }
+
+        inviteLoopFuture = sessionManager.scheduledThread().submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                Map<String, String> displayNames = new HashMap<>();
+                try {
+                    for (FollowerResponse.Person person : get()) {
+                        String displayName = person.displayName != null ? person.displayName : person.gamertag;
+                        if (displayName != null) {
+                            displayNames.put(person.xuid, displayName);
+                        }
+                    }
+                } catch (XboxFriendsException e) {
+                    logger.error("Failed to load people list for invite loop", e);
+                }
+
+                Set<String> targetXuids = new java.util.LinkedHashSet<>();
+                try {
+                    targetXuids.addAll(sessionManager.storageManager().playerHistory().all().keySet());
+                } catch (IOException e) {
+                    logger.error("Failed to load player history for invite loop", e);
+                }
+
+                targetXuids.addAll(displayNames.keySet());
+                if (targetXuids.isEmpty()) {
+                    try {
+                        TimeUnit.SECONDS.sleep(10);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    continue;
+                }
+
+                for (String xuid : targetXuids) {
+                    if (xuid.equals(sessionManager.getXuid())) {
+                        continue;
+                    }
+
+                    String display = displayNames.getOrDefault(xuid, xuid);
+                    logger.info("[LOG] Invited: " + display);
+                    sendInvite(xuid);
+                    try {
+                        TimeUnit.SECONDS.sleep(10);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        });
     }
 }
