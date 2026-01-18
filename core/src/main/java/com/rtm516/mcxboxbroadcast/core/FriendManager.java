@@ -39,6 +39,7 @@ public class FriendManager {
     private Future<?> internalScheduledFuture;
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
+    private int autoInviteIndex;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -319,11 +320,25 @@ public class FriendManager {
 
         sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
             try {
-                for (FollowerResponse.Person person : lastFriendCache()) {
+                List<FollowerResponse.Person> friends = lastFriendCache();
+                if (friends.isEmpty()) {
+                    return;
+                }
+
+                for (int attempts = 0; attempts < friends.size(); attempts++) {
+                    if (autoInviteIndex >= friends.size()) {
+                        autoInviteIndex = 0;
+                    }
+
+                    FollowerResponse.Person person = friends.get(autoInviteIndex);
+                    autoInviteIndex++;
+
                     if (isGuestAccount(person.xuid)) {
                         continue;
                     }
+
                     sendInvite(person.xuid);
+                    break;
                 }
             } catch (Exception e) {
                 logger.error("Failed to send periodic invites", e);

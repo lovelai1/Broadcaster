@@ -125,7 +125,7 @@ public interface CoreConfig {
         @DefaultBoolean(true)
         boolean autoUnfollow();
 
-        @Comment("Should we automatically send invites to all friends every 3 seconds")
+        @Comment("Should we automatically send invites to friends every 3 seconds")
         @DefaultBoolean(true)
         boolean initialInvite();
 
