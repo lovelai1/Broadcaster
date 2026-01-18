@@ -335,8 +335,11 @@ public class FriendManager {
                     return;
                 }
 
-                sendInvite(person.xuid);
-                logger.info("Invited " + person.gamertag + " (" + person.xuid + ")");
+                if (sendInvite(person.xuid)) {
+                    logger.info("Invited " + person.gamertag + " (" + person.xuid + ")");
+                } else {
+                    logger.warn("Failed to invite " + person.gamertag + " (" + person.xuid + ")");
+                }
             } catch (Exception e) {
                 logger.error("Failed to auto-invite friends", e);
             }
@@ -405,7 +408,9 @@ public class FriendManager {
 
                         // Let the user know we added a friend
                         logger.info("Added " + entry.getValue() + " (" + entry.getKey() + ") as a friend");
-                        sendInvite(entry.getKey());
+                        if (!sendInvite(entry.getKey())) {
+                            logger.warn("Failed to invite " + entry.getValue() + " (" + entry.getKey() + ")");
+                        }
 
                         // Update the user in the cache
                         Optional<FollowerResponse.Person> friend = lastFriendCache.stream().filter(p -> p.xuid.equals(entry.getKey())).findFirst();
@@ -608,7 +613,9 @@ public class FriendManager {
                     continue;
                 }
                 logger.info("Added " + friend.get().gamertag + " (" + xuid + ") as a friend");
-                sendInvite(xuid);
+                if (!sendInvite(xuid)) {
+                    logger.warn("Failed to invite " + friend.get().gamertag + " (" + xuid + ")");
+                }
             }
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to accept friend requests", e);
@@ -620,10 +627,10 @@ public class FriendManager {
      *
      * @param xuid The XUID of the user to invite
      */
-    public void sendInvite(String xuid) {
+    public boolean sendInvite(String xuid) {
         // Only invite if enabled
         if (!initialInvite) {
-            return;
+            return false;
         }
 
         try {
@@ -647,9 +654,16 @@ public class FriendManager {
                 .build();
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
-            logger.debug(inviteResponse.body());
+            if (inviteResponse.statusCode() >= 200 && inviteResponse.statusCode() < 300) {
+                logger.debug(inviteResponse.body());
+                return true;
+            }
+
+            logger.warn("Invite request failed for " + xuid + ": (" + inviteResponse.statusCode() + ") " + inviteResponse.body());
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
         }
+
+        return false;
     }
 }
