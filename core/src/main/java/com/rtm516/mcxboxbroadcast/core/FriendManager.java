@@ -37,7 +37,6 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
-    private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
@@ -215,6 +214,8 @@ public class FriendManager {
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
+        startRecurringInvites();
+
         if (!friendSyncConfig.expiry().enabled()) return;
 
         StorageManager.PlayerHistoryStorage playerHistory = sessionManager.storageManager().playerHistory();
@@ -284,7 +285,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +309,22 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void startRecurringInvites() {
+        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                for (FollowerResponse.Person person : lastFriendCache()) {
+                    if (isGuestAccount(person.xuid)) {
+                        continue;
+                    }
+
+                    sendInvite(person.xuid);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to send recurring invites", e);
+            }
+        }, 3, 3, TimeUnit.SECONDS);
     }
 
     /**
@@ -589,11 +605,6 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
-        // Only invite if enabled
-        if (!initialInvite) {
-            return;
-        }
-
         try {
             CreateHandleRequest createHandleContent = new CreateHandleRequest(
                 1,
