@@ -36,6 +36,8 @@ public class FriendManager {
     private final Map<String, String> toRemove;
 
     private List<FollowerResponse.Person> lastFriendCache;
+    private List<FollowerResponse.Person> inviteLoopCache = new ArrayList<>();
+    private int inviteLoopIndex = 0;
     private Future<?> internalScheduledFuture;
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
@@ -208,9 +210,11 @@ public class FriendManager {
 
     public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
         shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
+        initialInvite = friendSyncConfig.initialInvite();
 
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
+        initAutoInviteLoop();
 
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
@@ -284,7 +288,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +312,35 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initAutoInviteLoop() {
+        if (!initialInvite) {
+            return;
+        }
+
+        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                if (inviteLoopCache.isEmpty() || inviteLoopIndex >= inviteLoopCache.size()) {
+                    inviteLoopCache = get();
+                    inviteLoopIndex = 0;
+                }
+
+                if (inviteLoopCache.isEmpty()) {
+                    return;
+                }
+
+                FollowerResponse.Person person = inviteLoopCache.get(inviteLoopIndex++);
+                if (isGuestAccount(person.xuid)) {
+                    return;
+                }
+
+                sendInvite(person.xuid);
+                logger.info("Invited " + person.gamertag + " (" + person.xuid + ")");
+            } catch (Exception e) {
+                logger.error("Failed to auto-invite friends", e);
+            }
+        }, 0, 3, TimeUnit.SECONDS);
     }
 
     /**
