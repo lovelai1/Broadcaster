@@ -208,9 +208,11 @@ public class FriendManager {
 
     public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
         shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
+        this.initialInvite = friendSyncConfig.initialInvite();
 
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
+        initAutoInvite();
 
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
@@ -284,7 +286,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +310,25 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initAutoInvite() {
+        if (!initialInvite) {
+            return;
+        }
+
+        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                for (FollowerResponse.Person person : lastFriendCache()) {
+                    if (isGuestAccount(person.xuid)) {
+                        continue;
+                    }
+                    sendInvite(person.xuid);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to send periodic invites", e);
+            }
+        }, 0, 3, TimeUnit.SECONDS);
     }
 
     /**
