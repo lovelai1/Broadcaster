@@ -125,7 +125,7 @@ public interface CoreConfig {
         @DefaultBoolean(true)
         boolean autoUnfollow();
 
-        @Comment("Should we automatically send an invite when a friend is added")
+        @Comment("Should we continuously send invites in a loop to everyone we follow or who follows us")
         @DefaultBoolean(true)
         boolean initialInvite();
 

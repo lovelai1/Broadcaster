@@ -39,6 +39,8 @@ public class FriendManager {
     private Future<?> internalScheduledFuture;
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
+    private List<FollowerResponse.Person> inviteCycle;
+    private int inviteIndex;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -208,9 +210,11 @@ public class FriendManager {
 
     public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
         shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
+        initialInvite = friendSyncConfig.initialInvite();
 
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
+        initInviteLoop();
 
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
@@ -284,7 +288,6 @@ public class FriendManager {
      * @param friendSyncConfig The config to use for the auto friend sync
      */
     private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
@@ -309,6 +312,42 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initInviteLoop() {
+        if (!initialInvite) {
+            return;
+        }
+
+        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                if (inviteCycle == null || inviteIndex >= inviteCycle.size()) {
+                    inviteCycle = get();
+                    inviteIndex = 0;
+                }
+
+                if (inviteCycle.isEmpty()) {
+                    return;
+                }
+
+                FollowerResponse.Person person = inviteCycle.get(inviteIndex);
+                inviteIndex++;
+
+                if (isGuestAccount(person.xuid)) {
+                    return;
+                }
+
+                String displayName = person.gamertag != null ? person.gamertag : person.displayName;
+                if (displayName == null || displayName.isBlank()) {
+                    displayName = "Unknown";
+                }
+
+                logger.info("Inviting " + displayName + " (" + person.xuid + ")");
+                sendInvite(person.xuid);
+            } catch (Exception e) {
+                logger.error("Failed to send invite", e);
+            }
+        }, 1, 1, TimeUnit.SECONDS);
     }
 
     /**
