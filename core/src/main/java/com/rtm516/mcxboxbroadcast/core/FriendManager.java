@@ -1,7 +1,6 @@
 package com.rtm516.mcxboxbroadcast.core;
 
 import com.google.gson.JsonParseException;
-import com.rtm516.mcxboxbroadcast.core.configs.CoreConfig;
 import com.rtm516.mcxboxbroadcast.core.exceptions.XboxFriendsException;
 import com.rtm516.mcxboxbroadcast.core.models.friend.FriendModifyResponse;
 import com.rtm516.mcxboxbroadcast.core.models.friend.FriendRequestAcceptResponse;
@@ -33,6 +32,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class FriendManager {
+    private static final FriendSyncSettings DEFAULT_SETTINGS = new FriendSyncSettings(
+        60,
+        true,
+        true,
+        true,
+        new InviteLoopSettings(false, 60, 300),
+        new ExpirySettings(true, 15, 1800)
+    );
     private final HttpClient httpClient;
     private final Logger logger;
     private final SessionManagerCore sessionManager;
@@ -227,7 +234,8 @@ public class FriendManager {
         callInternalProcess();
     }
 
-    public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
+    public void init() {
+        FriendSyncSettings friendSyncConfig = DEFAULT_SETTINGS;
         shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
 
         // Initialize the auto friend sync if enabled
@@ -239,7 +247,9 @@ public class FriendManager {
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
-        if (!friendSyncConfig.expiry().enabled()) return;
+        if (!friendSyncConfig.expiry().enabled()) {
+            return;
+        }
 
         StorageManager.PlayerHistoryStorage playerHistory = sessionManager.storageManager().playerHistory();
         if (playerHistory.isFirstRun()) {
@@ -307,7 +317,7 @@ public class FriendManager {
      *
      * @param friendSyncConfig The config to use for the auto friend sync
      */
-    private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
+    private void initAutoFriend(FriendSyncSettings friendSyncConfig) {
         this.initialInvite = friendSyncConfig.initialInvite();
         if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
@@ -335,8 +345,8 @@ public class FriendManager {
         }
     }
 
-    private void initInviteLoop(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        CoreConfig.FriendSyncConfig.InviteLoopConfig inviteLoopConfig = friendSyncConfig.inviteLoop();
+    private void initInviteLoop(FriendSyncSettings friendSyncConfig) {
+        InviteLoopSettings inviteLoopConfig = friendSyncConfig.inviteLoop();
         if (!inviteLoopConfig.enabled()) {
             return;
         }
@@ -817,5 +827,21 @@ public class FriendManager {
         private static InviteSendResult rateLimited(int retryAfterSeconds) {
             return new InviteSendResult(true, false, Math.max(1, retryAfterSeconds));
         }
+    }
+
+    private record FriendSyncSettings(
+        int updateInterval,
+        boolean autoFollow,
+        boolean autoUnfollow,
+        boolean initialInvite,
+        InviteLoopSettings inviteLoop,
+        ExpirySettings expiry
+    ) {
+    }
+
+    private record InviteLoopSettings(boolean enabled, int delaySeconds, int refreshIntervalSeconds) {
+    }
+
+    private record ExpirySettings(boolean enabled, int days, int check) {
     }
 }

@@ -29,7 +29,6 @@ public class SessionManager extends SessionManagerCore {
     private final ScheduledExecutorService scheduledThreadPool;
     private final Map<String, SubSessionManager> subSessionManagers;
 
-    private CoreConfig.FriendSyncConfig friendSyncConfig;
     private long subSessionInitDelaySeconds;
     private Runnable restartCallback;
 
@@ -69,20 +68,18 @@ public class SessionManager extends SessionManagerCore {
      * Initialize the session manager with the given session information
      *
      * @param sessionInfo      The session information to use
-     * @param friendSyncConfig The friend sync configuration to use
      * @throws SessionCreationException If the session failed to create either because it already exists or some other reason
      * @throws SessionUpdateException   If the session data couldn't be set due to some issue
      */
-    public void init(SessionInfo sessionInfo, CoreConfig.FriendSyncConfig friendSyncConfig, CoreConfig.SessionConfig sessionConfig) throws SessionCreationException, SessionUpdateException {
+    public void init(SessionInfo sessionInfo, CoreConfig.SessionConfig sessionConfig) throws SessionCreationException, SessionUpdateException {
         // Set the internal session information based on the session info
         this.sessionInfo = new ExpandedSessionInfo("", "", sessionInfo);
 
         super.init();
 
         // Set up the auto friend sync
-        this.friendSyncConfig = friendSyncConfig;
         this.subSessionInitDelaySeconds = Math.max(0, sessionConfig.subSessionInitDelaySeconds());
-        friendManager().init(this.friendSyncConfig);
+        friendManager().init();
 
         // Load sub-sessions from cache
         List<String> subSessions = new ArrayList<>();
@@ -291,7 +288,7 @@ public class SessionManager extends SessionManagerCore {
             try {
                 SubSessionManager subSessionManager = new SubSessionManager(id, this, storageManager().subSession(id), notificationManager(), logger);
                 subSessionManager.init();
-                subSessionManager.friendManager().init(this.friendSyncConfig);
+                subSessionManager.friendManager().init();
                 subSessionManagers.put(id, subSessionManager);
             } catch (SessionCreationException | SessionUpdateException e) {
                 logger.error("Failed to create sub-session " + id, e);
