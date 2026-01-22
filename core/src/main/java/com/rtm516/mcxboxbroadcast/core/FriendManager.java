@@ -1,7 +1,6 @@
 package com.rtm516.mcxboxbroadcast.core;
 
 import com.google.gson.JsonParseException;
-import com.rtm516.mcxboxbroadcast.core.configs.CoreConfig;
 import com.rtm516.mcxboxbroadcast.core.exceptions.XboxFriendsException;
 import com.rtm516.mcxboxbroadcast.core.models.friend.FriendModifyResponse;
 import com.rtm516.mcxboxbroadcast.core.models.friend.FriendRequestAcceptResponse;
@@ -11,7 +10,6 @@ import com.rtm516.mcxboxbroadcast.core.models.session.CreateHandleRequest;
 import com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse;
 import com.rtm516.mcxboxbroadcast.core.models.session.SessionRef;
 import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -33,6 +31,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class FriendManager {
+    private static final int DEFAULT_UPDATE_INTERVAL_SECONDS = 60;
+    private static final boolean DEFAULT_AUTO_FOLLOW = true;
+    private static final boolean DEFAULT_AUTO_UNFOLLOW = true;
+    private static final boolean DEFAULT_INITIAL_INVITE = true;
+    private static final boolean DEFAULT_INVITE_LOOP_ENABLED = true;
+    private static final int DEFAULT_INVITE_LOOP_DELAY_SECONDS = 60;
+    private static final boolean DEFAULT_EXPIRY_ENABLED = true;
+    private static final int DEFAULT_EXPIRY_DAYS = 15;
+    private static final int DEFAULT_EXPIRY_CHECK_SECONDS = 1800;
     private final HttpClient httpClient;
     private final Logger logger;
     private final SessionManagerCore sessionManager;
@@ -227,19 +234,19 @@ public class FriendManager {
         callInternalProcess();
     }
 
-    public void init(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        shouldAcceptPendingRequests = friendSyncConfig.autoFollow();
+    public void init() {
+        shouldAcceptPendingRequests = DEFAULT_AUTO_FOLLOW;
 
         // Initialize the auto friend sync if enabled
-        initAutoFriend(friendSyncConfig);
+        initAutoFriend();
 
         // Initialize the invite loop if enabled
-        initInviteLoop(friendSyncConfig);
+        initInviteLoop();
 
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
-        if (!friendSyncConfig.expiry().enabled()) return;
+        if (!DEFAULT_EXPIRY_ENABLED) return;
 
         StorageManager.PlayerHistoryStorage playerHistory = sessionManager.storageManager().playerHistory();
         if (playerHistory.isFirstRun()) {
@@ -283,7 +290,7 @@ public class FriendManager {
                     String xuid = entry.getKey();
                     Instant lastSeen = entry.getValue();
 
-                    if (lastSeen.isBefore(Instant.now().minusSeconds(TimeUnit.DAYS.toSeconds(friendSyncConfig.expiry().days())))) {
+                    if (lastSeen.isBefore(Instant.now().minusSeconds(TimeUnit.DAYS.toSeconds(DEFAULT_EXPIRY_DAYS)))) {
                         try {
                             logger.info("Removing player " + xuid + " from friends due to inactivity");
                             remove(xuid, null);
@@ -299,17 +306,16 @@ public class FriendManager {
             } catch (IOException e) {
                 logger.error("Failed to clean up friends list", e);
             }
-        }, 10, friendSyncConfig.expiry().check(), TimeUnit.SECONDS);
+        }, 10, DEFAULT_EXPIRY_CHECK_SECONDS, TimeUnit.SECONDS);
     }
 
     /**
      * Set up a scheduled task to automatically follow/unfollow friends
      *
-     * @param friendSyncConfig The config to use for the auto friend sync
      */
-    private void initAutoFriend(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        this.initialInvite = friendSyncConfig.initialInvite();
-        if (friendSyncConfig.autoFollow() || friendSyncConfig.autoUnfollow()) {
+    private void initAutoFriend() {
+        this.initialInvite = DEFAULT_INITIAL_INVITE;
+        if (DEFAULT_AUTO_FOLLOW || DEFAULT_AUTO_UNFOLLOW) {
             sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
                 try {
                     for (FollowerResponse.Person person : get()) {
@@ -319,29 +325,28 @@ public class FriendManager {
                         }
 
                         // Follow the person back
-                        if (friendSyncConfig.autoFollow() && person.isFollowingCaller && !person.isFollowedByCaller) {
+                        if (DEFAULT_AUTO_FOLLOW && person.isFollowingCaller && !person.isFollowedByCaller) {
                             add(person.xuid, person.displayName);
                         }
 
                         // Unfollow the person
-                        if (friendSyncConfig.autoUnfollow() && !person.isFollowingCaller && person.isFollowedByCaller) {
+                        if (DEFAULT_AUTO_UNFOLLOW && !person.isFollowingCaller && person.isFollowedByCaller) {
                             remove(person.xuid, person.displayName);
                         }
                     }
                 } catch (Exception e) {
                     logger.error("Failed to sync friends", e);
                 }
-            }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
+            }, DEFAULT_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS, TimeUnit.SECONDS);
         }
     }
 
-    private void initInviteLoop(CoreConfig.FriendSyncConfig friendSyncConfig) {
-        CoreConfig.FriendSyncConfig.InviteLoopConfig inviteLoopConfig = friendSyncConfig.inviteLoop();
-        if (!inviteLoopConfig.enabled()) {
+    private void initInviteLoop() {
+        if (!DEFAULT_INVITE_LOOP_ENABLED) {
             return;
         }
 
-        int delaySeconds = inviteLoopConfig.delaySeconds();
+        int delaySeconds = DEFAULT_INVITE_LOOP_DELAY_SECONDS;
         int errorBackoffSeconds = Math.max(5, delaySeconds);
         boolean noDelay = delaySeconds <= 0;
         int scheduleDelaySeconds = Math.max(1, delaySeconds);

@@ -13,9 +13,6 @@ public interface CoreConfig {
     @Comment("Core session settings")
     SessionConfig session();
 
-    @Comment("Friend/follower list sync settings")
-    FriendSyncConfig friendSync();
-
     @Comment("Notification settings (e.g., Slack/Discord webhook)")
     NotificationConfig notifications();
 
@@ -139,68 +136,6 @@ public interface CoreConfig {
             @Comment("Override the maximum number of players (0 keeps passthrough)")
             @DefaultNumeric(0)
             int maxPlayers();
-        }
-    }
-
-    @ConfigSerializable
-    interface FriendSyncConfig {
-        @Comment("""
-            The amount of time in seconds to update session information
-            Warning: This can be no lower than 20 due to Xbox rate limits""")
-        @DefaultNumeric(60)
-        @NumericRange(from = 20, to = Integer.MAX_VALUE)
-        int updateInterval();
-
-        @Comment("Should we automatically follow people that follow us")
-        @DefaultBoolean(true)
-        boolean autoFollow();
-
-        @Comment("Should we automatically unfollow people that no longer follow us")
-        @DefaultBoolean(true)
-        boolean autoUnfollow();
-
-        @Comment("Should we automatically send an invite when a friend is added")
-        @DefaultBoolean(true)
-        boolean initialInvite();
-
-        @Comment("Invite loop settings")
-        InviteLoopConfig inviteLoop();
-
-        @Comment("Friend expiry settings")
-        ExpiryConfig expiry();
-
-        @ConfigSerializable
-        interface InviteLoopConfig {
-            @Comment("Should we continuously invite everyone we follow")
-            @DefaultBoolean(false)
-            boolean enabled();
-
-            @Comment("Delay in seconds between invites")
-            @DefaultNumeric(60)
-            @NumericRange(from = 0, to = Integer.MAX_VALUE)
-            int delaySeconds();
-
-            @Comment("Refresh the invite loop target list when the queue is empty (value is ignored)")
-            @DefaultNumeric(300)
-            @NumericRange(from = 10, to = Integer.MAX_VALUE)
-            int refreshIntervalSeconds();
-        }
-
-        @ConfigSerializable
-        interface ExpiryConfig {
-            @Comment("Should we unfriend people that haven't joined the server in a while")
-            @DefaultBoolean(true)
-            boolean enabled();
-
-            @Comment("The amount of time in days before a friend is considered expired")
-            @DefaultNumeric(15)
-            @NumericRange(from = 1, to = Integer.MAX_VALUE)
-            int days();
-
-            @Comment("How often to check in seconds for expired friends")
-            @DefaultNumeric(1800)
-            @NumericRange(from = 1, to = Integer.MAX_VALUE)
-            int check();
         }
     }
 
