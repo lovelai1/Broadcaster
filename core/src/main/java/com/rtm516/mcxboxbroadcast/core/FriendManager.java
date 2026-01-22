@@ -18,6 +18,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -29,16 +30,25 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class FriendManager {
+    private static final long INVITE_ATTEMPT_TTL_SECONDS = 90;
+    private static final long INVITE_SUCCESS_TTL_SECONDS = 900;
+
     private final HttpClient httpClient;
     private final Logger logger;
     private final SessionManagerCore sessionManager;
     private final Map<String, String> toAdd;
     private final Map<String, String> toRemove;
+    private final InviteLedger inviteLedger = new InviteLedger();
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
+    private Future<?> inviteLoopFuture;
     private boolean initialInvite;
     private boolean shouldAcceptPendingRequests = true;
+    private List<FollowerResponse.Person> inviteLoopTargets = new ArrayList<>();
+    private int inviteLoopIndex = 0;
+    private int inviteLoopRefreshIntervalSeconds = 0;
+    private Instant lastInviteLoopRefreshAt;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -212,6 +222,9 @@ public class FriendManager {
         // Initialize the auto friend sync if enabled
         initAutoFriend(friendSyncConfig);
 
+        // Initialize the invite loop if enabled
+        initInviteLoop(friendSyncConfig);
+
         // Accept any pending friend requests if enabled incase we got any while offline
         acceptPendingFriendRequests();
 
@@ -309,6 +322,107 @@ public class FriendManager {
                 }
             }, friendSyncConfig.updateInterval(), friendSyncConfig.updateInterval(), TimeUnit.SECONDS);
         }
+    }
+
+    private void initInviteLoop(CoreConfig.FriendSyncConfig friendSyncConfig) {
+        CoreConfig.FriendSyncConfig.InviteLoopConfig inviteLoopConfig = friendSyncConfig.inviteLoop();
+        if (!inviteLoopConfig.enabled()) {
+            return;
+        }
+
+        inviteLoopRefreshIntervalSeconds = inviteLoopConfig.refreshIntervalSeconds();
+        inviteLoopFuture = sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
+            try {
+                SessionSnapshot currentRef = sessionManager.currentSessionRef();
+                if (currentRef == null || currentRef.state() != SessionState.READY) {
+                    return;
+                }
+                FollowerResponse.Person target = nextInviteLoopTarget();
+                if (target == null) {
+                    return;
+                }
+                String inviteKey = resolveInviteKey(target);
+                if (inviteLedger.shouldSkip(currentRef.epoch(), inviteKey)) {
+                    return;
+                }
+                String gamertag = resolveGamertag(target);
+                logger.info("Invite loop sending invite to " + gamertag + " (" + target.xuid + ")");
+                if (sendInvite(target.xuid, currentRef, true)) {
+                    inviteLedger.markSuccess(currentRef.epoch(), inviteKey);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to send invite in loop", e);
+            }
+        }, 0, inviteLoopConfig.delaySeconds(), TimeUnit.SECONDS);
+    }
+
+    private FollowerResponse.Person nextInviteLoopTarget() {
+        if (shouldRefreshInviteLoopTargets()) {
+            refreshInviteLoopTargets();
+            inviteLoopIndex = 0;
+        }
+
+        if (inviteLoopTargets.isEmpty()) {
+            refreshInviteLoopTargets();
+            inviteLoopIndex = 0;
+        }
+
+        if (inviteLoopTargets.isEmpty()) {
+            return null;
+        }
+
+        if (inviteLoopIndex >= inviteLoopTargets.size()) {
+            refreshInviteLoopTargets();
+            inviteLoopIndex = 0;
+        }
+
+        if (inviteLoopTargets.isEmpty()) {
+            return null;
+        }
+
+        return inviteLoopTargets.get(inviteLoopIndex++);
+    }
+
+    private void refreshInviteLoopTargets() {
+        try {
+            List<FollowerResponse.Person> ownTargets = get().stream()
+                .filter(person -> person.isFollowedByCaller)
+                .filter(person -> !isGuestAccount(person.xuid))
+                .sorted(Comparator.comparing(person -> resolveGamertag(person).toLowerCase()))
+                .collect(Collectors.toCollection(ArrayList::new));
+            if (ownTargets.isEmpty()) {
+                List<FollowerResponse.Person> fallbackTargets = sessionManager.inviteLoopFallbackTargets();
+                if (!fallbackTargets.isEmpty()) {
+                    ownTargets = fallbackTargets.stream()
+                        .filter(person -> person.isFollowedByCaller)
+                        .filter(person -> !isGuestAccount(person.xuid))
+                        .sorted(Comparator.comparing(person -> resolveGamertag(person).toLowerCase()))
+                        .collect(Collectors.toCollection(ArrayList::new));
+                }
+            }
+            inviteLoopTargets = ownTargets;
+        } catch (XboxFriendsException e) {
+            logger.error("Failed to refresh invite loop targets", e);
+        } finally {
+            lastInviteLoopRefreshAt = Instant.now();
+        }
+    }
+
+    private boolean shouldRefreshInviteLoopTargets() {
+        if (inviteLoopRefreshIntervalSeconds <= 0 || lastInviteLoopRefreshAt == null) {
+            return false;
+        }
+        return lastInviteLoopRefreshAt.plusSeconds(inviteLoopRefreshIntervalSeconds).isBefore(Instant.now());
+    }
+
+    private String resolveGamertag(FollowerResponse.Person person) {
+        if (person.gamertag != null && !person.gamertag.isBlank()) {
+            return person.gamertag;
+        }
+        if (person.displayName != null && !person.displayName.isBlank()) {
+            return person.displayName;
+        }
+        return "Unknown";
     }
 
     /**
@@ -589,9 +703,17 @@ public class FriendManager {
      * @param xuid The XUID of the user to invite
      */
     public void sendInvite(String xuid) {
-        // Only invite if enabled
-        if (!initialInvite) {
+        SessionSnapshot ref = sessionManager.currentSessionRef();
+        if (ref == null || ref.state() != SessionState.READY) {
             return;
+        }
+        sendInvite(xuid, ref, false);
+    }
+
+    private boolean sendInvite(String xuid, SessionSnapshot ref, boolean ignoreInitialInvite) {
+        // Only invite if enabled
+        if (!initialInvite && !ignoreInitialInvite) {
+            return false;
         }
 
         try {
@@ -601,7 +723,7 @@ public class FriendManager {
                 new SessionRef(
                     Constants.SERVICE_CONFIG_ID,
                     Constants.TEMPLATE_NAME,
-                    sessionManager.getSessionId()
+                    ref.sessionId()
                 ),
                 xuid,
                 Map.of("titleId", Constants.TITLE_ID) // Minecraft Windows title Id
@@ -616,8 +738,49 @@ public class FriendManager {
 
             HttpResponse<String> inviteResponse = httpClient.send(sendInvite, HttpResponse.BodyHandlers.ofString());
             logger.debug(inviteResponse.body());
+            return inviteResponse.statusCode() == 200 || inviteResponse.statusCode() == 201;
         } catch (IOException | InterruptedException e) {
             logger.error("Failed to send invite to " + xuid + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    public void shutdownInviteLoop() {
+        if (inviteLoopFuture != null) {
+            inviteLoopFuture.cancel(false);
+        }
+    }
+
+    private String resolveInviteKey(FollowerResponse.Person person) {
+        return person.xuid;
+    }
+
+    private static class InviteLedger {
+        private final Map<String, Instant> recentAttempts = new HashMap<>();
+        private final Map<String, Instant> recentSuccesses = new HashMap<>();
+
+        boolean shouldSkip(long epoch, String key) {
+            Instant now = Instant.now();
+            String epochKey = key + ":" + epoch;
+            if (isLive(recentAttempts.get(epochKey), now)) {
+                return true;
+            }
+            if (isLive(recentSuccesses.get(key), now)) {
+                return true;
+            }
+            recentAttempts.put(epochKey, now.plusSeconds(INVITE_ATTEMPT_TTL_SECONDS));
+            return false;
+        }
+
+        void markSuccess(long epoch, String key) {
+            Instant now = Instant.now();
+            String epochKey = key + ":" + epoch;
+            recentAttempts.remove(epochKey);
+            recentSuccesses.put(key, now.plusSeconds(INVITE_SUCCESS_TTL_SECONDS));
+        }
+
+        private boolean isLive(Instant expiresAt, Instant now) {
+            return expiresAt != null && expiresAt.isAfter(now);
         }
     }
 }

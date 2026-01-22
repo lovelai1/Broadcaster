@@ -1,9 +1,9 @@
 package com.rtm516.mcxboxbroadcast.core;
 
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
-import com.rtm516.mcxboxbroadcast.core.models.session.JoinSessionRequest;
 import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
 import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
+import com.rtm516.mcxboxbroadcast.core.models.session.CreateSessionRequest;
 
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -22,9 +22,10 @@ public class SubSessionManager extends SessionManagerCore {
      * @param notificationManager The notification manager to use for sending messages
      * @param logger The logger to use for outputting messages
      */
-    public SubSessionManager(String id, SessionManager parent, StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
+    public SubSessionManager(String id, SessionManager parent, SessionInfo sessionInfo, StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
         super(storageManager, notificationManager, logger.prefixed("Sub-Session " + id));
         this.parent = parent;
+        this.sessionInfo = new ExpandedSessionInfo("", "", sessionInfo);
     }
 
     @Override
@@ -34,7 +35,7 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     public String getSessionId() {
-        return parent.sessionInfo().getSessionId();
+        return sessionInfo.getSessionId();
     }
 
     @Override
@@ -52,6 +53,7 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     protected void updateSession() throws SessionUpdateException {
-        super.updateSessionInternal(Constants.JOIN_SESSION.formatted(parent.sessionInfo().getHandleId()), new JoinSessionRequest(parent.sessionInfo()));
+        checkConnection();
+        super.updateSessionInternal(Constants.CREATE_SESSION.formatted(this.sessionInfo.getSessionId()), new CreateSessionRequest(this.sessionInfo));
     }
 }

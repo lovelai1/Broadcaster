@@ -29,6 +29,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -52,11 +56,21 @@ public abstract class SessionManagerCore {
     protected String lastSessionResponse;
 
     protected boolean initialized = false;
+    private final AtomicLong sessionEpoch = new AtomicLong();
+    private final AtomicReference<SessionSnapshot> currentSessionRef = new AtomicReference<>();
+    private SessionState sessionState = SessionState.CREATING;
+    private final List<SessionLifecycleListener> sessionLifecycleListeners = new CopyOnWriteArrayList<>();
 
     private Channel netherNetChannel;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private NetherNetXboxSignaling signaling;
+
+    public interface SessionLifecycleListener {
+        void onSessionReady(SessionSnapshot ref);
+        void onSessionInvalidated(long epoch, InvalidationReason reason);
+        void onSessionTerminated(long epoch, InvalidationReason reason);
+    }
 
     /**
      * Create an instance of SessionManager
@@ -111,6 +125,15 @@ public abstract class SessionManagerCore {
     }
 
     /**
+     * Provide fallback invite loop targets (used by sub-sessions).
+     *
+     * @return A list of {@link com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse.Person}
+     */
+    public java.util.List<com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse.Person> inviteLoopFallbackTargets() {
+        return java.util.List.of();
+    }
+
+    /**
      * Get the scheduled thread pool for this session manager
      *
      * @return The scheduled thread pool
@@ -130,6 +153,14 @@ public abstract class SessionManagerCore {
      */
     public Logger logger() {
         return logger;
+    }
+
+    public void addSessionLifecycleListener(SessionLifecycleListener listener) {
+        sessionLifecycleListeners.add(listener);
+    }
+
+    public SessionSnapshot currentSessionRef() {
+        return currentSessionRef.get();
     }
 
     /**
@@ -302,6 +333,8 @@ public abstract class SessionManagerCore {
             logger.debug("Failed to create session handle '"  + lastSessionResponse + "' (" + createHandleResponse.statusCode() + ")");
             throw new SessionCreationException("Unable to create session handle, got status " + createHandleResponse.statusCode() + " trying to create: " + createHandleResponse.body());
         }
+
+        publishSessionReady();
     }
 
     /**
@@ -362,6 +395,7 @@ public abstract class SessionManagerCore {
                 logger.warn("Connection to websocket lost, re-creating session...");
                 logger.debug("WebSocket status: RTA Open: " + rtaIsOpen + " RTC Open: " + rtcIsOpen);
 
+                invalidateSession(InvalidationReason.NETWORK);
                 createSession();
                 logger.info("WebSocket session reconnected");
             } catch (SessionCreationException | SessionUpdateException e) {
@@ -436,8 +470,40 @@ public abstract class SessionManagerCore {
         }
         
         shutdownNetherNet();
-        
+        sessionState = SessionState.TERMINATED;
+        SessionSnapshot ref = currentSessionRef.get();
+        if (ref != null) {
+            publishSessionTerminated(ref.epoch(), InvalidationReason.UNKNOWN);
+        }
+        friendManager.shutdownInviteLoop();
         this.initialized = false;
+    }
+
+    private void publishSessionReady() {
+        long epoch = sessionEpoch.incrementAndGet();
+        SessionSnapshot ref = new SessionSnapshot(getSessionId(), sessionInfo != null ? sessionInfo.getHandleId() : "", epoch, SessionState.READY);
+        currentSessionRef.set(ref);
+        sessionState = SessionState.READY;
+        for (SessionLifecycleListener listener : sessionLifecycleListeners) {
+            listener.onSessionReady(ref);
+        }
+    }
+
+    private void invalidateSession(InvalidationReason reason) {
+        sessionState = SessionState.RECREATING;
+        SessionSnapshot ref = currentSessionRef.get();
+        if (ref == null) {
+            return;
+        }
+        for (SessionLifecycleListener listener : sessionLifecycleListeners) {
+            listener.onSessionInvalidated(ref.epoch(), reason);
+        }
+    }
+
+    private void publishSessionTerminated(long epoch, InvalidationReason reason) {
+        for (SessionLifecycleListener listener : sessionLifecycleListeners) {
+            listener.onSessionTerminated(epoch, reason);
+        }
     }
 
     private void shutdownNetherNet() {

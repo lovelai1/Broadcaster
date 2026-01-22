@@ -289,7 +289,7 @@ public class SessionManager extends SessionManagerCore {
     private void scheduleSubSessionCreation(String id, long delaySeconds) {
         scheduledThreadPool.schedule(() -> {
             try {
-                SubSessionManager subSessionManager = new SubSessionManager(id, this, storageManager().subSession(id), notificationManager(), logger);
+                SubSessionManager subSessionManager = new SubSessionManager(id, this, sessionInfo().copy(), storageManager().subSession(id), notificationManager(), logger);
                 subSessionManager.init();
                 subSessionManager.friendManager().init(this.friendSyncConfig);
                 subSessionManagers.put(id, subSessionManager);
