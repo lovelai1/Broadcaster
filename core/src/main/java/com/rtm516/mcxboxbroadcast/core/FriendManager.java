@@ -45,6 +45,7 @@ public class FriendManager {
     private int inviteLoopIndex = 0;
     private int inviteLoopRefreshIntervalSeconds = 0;
     private Instant lastInviteLoopRefreshAt;
+    private String lastInviteLoopTargetXuid;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -345,12 +346,10 @@ public class FriendManager {
     private FollowerResponse.Person nextInviteLoopTarget() {
         if (shouldRefreshInviteLoopTargets()) {
             refreshInviteLoopTargets();
-            inviteLoopIndex = 0;
         }
 
         if (inviteLoopTargets.isEmpty()) {
             refreshInviteLoopTargets();
-            inviteLoopIndex = 0;
         }
 
         if (inviteLoopTargets.isEmpty()) {
@@ -359,28 +358,68 @@ public class FriendManager {
 
         if (inviteLoopIndex >= inviteLoopTargets.size()) {
             refreshInviteLoopTargets();
-            inviteLoopIndex = 0;
         }
 
         if (inviteLoopTargets.isEmpty()) {
             return null;
         }
 
-        return inviteLoopTargets.get(inviteLoopIndex++);
+        if (inviteLoopIndex >= inviteLoopTargets.size()) {
+            inviteLoopIndex = 0;
+        }
+
+        FollowerResponse.Person target = inviteLoopTargets.get(inviteLoopIndex++);
+        lastInviteLoopTargetXuid = target.xuid;
+        return target;
     }
 
     private void refreshInviteLoopTargets() {
+        boolean updatedTargets = false;
         try {
-            inviteLoopTargets = get().stream()
+            List<FollowerResponse.Person> refreshedTargets = get().stream()
                 .filter(person -> person.isFollowedByCaller)
                 .filter(person -> !isGuestAccount(person.xuid))
                 .sorted(Comparator.comparing(person -> resolveGamertag(person).toLowerCase()))
                 .collect(Collectors.toCollection(ArrayList::new));
+
+            if (refreshedTargets.isEmpty() && !inviteLoopTargets.isEmpty()) {
+                logger.warn("Invite loop refresh returned no targets, keeping previous list");
+            } else {
+                inviteLoopTargets = refreshedTargets;
+                updatedTargets = true;
+            }
         } catch (XboxFriendsException e) {
             logger.error("Failed to refresh invite loop targets", e);
         } finally {
             lastInviteLoopRefreshAt = Instant.now();
+            if (updatedTargets) {
+                adjustInviteLoopIndexAfterRefresh();
+            }
         }
+    }
+
+    private void adjustInviteLoopIndexAfterRefresh() {
+        if (inviteLoopTargets.isEmpty()) {
+            inviteLoopIndex = 0;
+            return;
+        }
+
+        if (lastInviteLoopTargetXuid == null) {
+            inviteLoopIndex = 0;
+            return;
+        }
+
+        for (int index = 0; index < inviteLoopTargets.size(); index++) {
+            if (inviteLoopTargets.get(index).xuid.equals(lastInviteLoopTargetXuid)) {
+                inviteLoopIndex = index + 1;
+                if (inviteLoopIndex >= inviteLoopTargets.size()) {
+                    inviteLoopIndex = 0;
+                }
+                return;
+            }
+        }
+
+        inviteLoopIndex = 0;
     }
 
     private boolean shouldRefreshInviteLoopTargets() {
