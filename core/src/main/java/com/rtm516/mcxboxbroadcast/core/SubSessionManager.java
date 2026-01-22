@@ -1,9 +1,14 @@
 package com.rtm516.mcxboxbroadcast.core;
 
+import com.rtm516.mcxboxbroadcast.core.configs.CoreConfig;
+import com.rtm516.mcxboxbroadcast.core.exceptions.SessionCreationException;
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
-import com.rtm516.mcxboxbroadcast.core.models.session.JoinSessionRequest;
+import com.rtm516.mcxboxbroadcast.core.models.session.CreateSessionRequest;
+import com.rtm516.mcxboxbroadcast.core.models.session.CreateSessionResponse;
 import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
 import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
+
+import com.google.gson.JsonParseException;
 
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -34,7 +39,13 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     public String getSessionId() {
-        return parent.sessionInfo().getSessionId();
+        return sessionInfo.getSessionId();
+    }
+
+    public void init(SessionInfo sessionInfo, CoreConfig.FriendSyncConfig friendSyncConfig) throws SessionCreationException, SessionUpdateException {
+        this.sessionInfo = new ExpandedSessionInfo("", "", sessionInfo);
+        super.init();
+        friendManager().init(friendSyncConfig);
     }
 
     @Override
@@ -52,6 +63,12 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     protected void updateSession() throws SessionUpdateException {
-        super.updateSessionInternal(Constants.JOIN_SESSION.formatted(parent.sessionInfo().getHandleId()), new JoinSessionRequest(parent.sessionInfo()));
+        checkConnection();
+        String responseBody = super.updateSessionInternal(Constants.CREATE_SESSION.formatted(this.sessionInfo.getSessionId()), new CreateSessionRequest(this.sessionInfo));
+        try {
+            Constants.GSON.fromJson(responseBody, CreateSessionResponse.class);
+        } catch (JsonParseException e) {
+            throw new SessionUpdateException("Failed to parse session response: " + e.getMessage());
+        }
     }
 }

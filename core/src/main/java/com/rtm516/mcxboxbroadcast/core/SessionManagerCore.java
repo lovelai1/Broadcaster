@@ -111,6 +111,15 @@ public abstract class SessionManagerCore {
     }
 
     /**
+     * Provide fallback invite loop targets (used by sub-sessions).
+     *
+     * @return A list of {@link com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse.Person}
+     */
+    public java.util.List<com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse.Person> inviteLoopFallbackTargets() {
+        return java.util.List.of();
+    }
+
+    /**
      * Get the scheduled thread pool for this session manager
      *
      * @return The scheduled thread pool

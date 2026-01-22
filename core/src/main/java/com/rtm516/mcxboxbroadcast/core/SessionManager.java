@@ -290,8 +290,7 @@ public class SessionManager extends SessionManagerCore {
         scheduledThreadPool.schedule(() -> {
             try {
                 SubSessionManager subSessionManager = new SubSessionManager(id, this, storageManager().subSession(id), notificationManager(), logger);
-                subSessionManager.init();
-                subSessionManager.friendManager().init(this.friendSyncConfig);
+                subSessionManager.init(this.sessionInfo.copy(), this.friendSyncConfig);
                 subSessionManagers.put(id, subSessionManager);
             } catch (SessionCreationException | SessionUpdateException e) {
                 logger.error("Failed to create sub-session " + id, e);
