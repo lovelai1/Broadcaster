@@ -9,23 +9,16 @@ import com.rtm516.mcxboxbroadcast.core.models.friend.FriendStatusResponse;
 import com.rtm516.mcxboxbroadcast.core.models.session.CreateHandleRequest;
 import com.rtm516.mcxboxbroadcast.core.models.session.FollowerResponse;
 import com.rtm516.mcxboxbroadcast.core.models.session.SessionRef;
-import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.Deque;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -48,11 +41,8 @@ public class FriendManager {
 
     private List<FollowerResponse.Person> lastFriendCache;
     private Future<?> internalScheduledFuture;
-    private Future<?> inviteLoopFuture;
-    private boolean initialInvite;
+    private boolean initialInvite = true;
     private boolean shouldAcceptPendingRequests = true;
-    private final Deque<FollowerResponse.Person> inviteLoopQueue = new ArrayDeque<>();
-    private Instant inviteLoopBackoffUntil;
 
     public FriendManager(HttpClient httpClient, Logger logger, SessionManagerCore sessionManager) {
         this.httpClient = httpClient;
@@ -232,249 +222,6 @@ public class FriendManager {
 
         // Process the add/remove requests
         callInternalProcess();
-    }
-
-    public void init() {
-        shouldAcceptPendingRequests = DEFAULT_AUTO_FOLLOW;
-
-        // Initialize the auto friend sync if enabled
-        initAutoFriend();
-
-        // Initialize the invite loop if enabled
-        initInviteLoop();
-
-        // Accept any pending friend requests if enabled incase we got any while offline
-        acceptPendingFriendRequests();
-
-        if (!DEFAULT_EXPIRY_ENABLED) return;
-
-        StorageManager.PlayerHistoryStorage playerHistory = sessionManager.storageManager().playerHistory();
-        if (playerHistory.isFirstRun()) {
-            logger.info("Player history is being initialized for the first time, this may take a few seconds");
-            try {
-                for (FollowerResponse.Person friend : get()) {
-                    playerHistory.lastSeen(friend.xuid, Instant.now());
-                }
-            } catch (Exception e) {
-                logger.error("Failed to initialize player history", e);
-            }
-        } else {
-            try {
-                Set<String> friendXuids = lastFriendCache().stream().map(person -> person.xuid).collect(Collectors.toUnmodifiableSet());
-                Set<String> historyXuids = playerHistory.all().keySet();
-
-                // Remove any players from history that are no longer friends
-                for (String xuid : historyXuids) {
-                    if (!friendXuids.contains(xuid)) {
-                        playerHistory.clear(xuid);
-                    }
-                }
-
-                // Add any friends that are missing from history
-                for (String xuid : friendXuids) {
-                    if (!historyXuids.contains(xuid)) {
-                        playerHistory.lastSeen(xuid, Instant.now());
-                    }
-                }
-            } catch (Exception e) {
-                logger.error("Failed to clean up player history", e);
-            }
-        }
-
-        sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
-            try {
-                Map<String, String> xuidGamertagMap = new HashMap<>();
-                lastFriendCache().forEach(person -> xuidGamertagMap.put(person.xuid, person.gamertag));
-
-                for (Map.Entry<String, Instant> entry : playerHistory.all().entrySet()) {
-                    String xuid = entry.getKey();
-                    Instant lastSeen = entry.getValue();
-
-                    if (lastSeen.isBefore(Instant.now().minusSeconds(TimeUnit.DAYS.toSeconds(DEFAULT_EXPIRY_DAYS)))) {
-                        try {
-                            logger.info("Removing player " + xuid + " from friends due to inactivity");
-                            remove(xuid, null);
-                        } catch (Exception e) {
-                            if (e.getMessage().startsWith("429: ")) {
-                                logger.warn("Rate limited while trying to remove player " + xuid + " from friends for inactivity, will try again later");
-                                return;
-                            }
-                            logger.error("Failed to remove player " + xuid + " from friends for inactivity", e);
-                        }
-                    }
-                }
-            } catch (IOException e) {
-                logger.error("Failed to clean up friends list", e);
-            }
-        }, 10, DEFAULT_EXPIRY_CHECK_SECONDS, TimeUnit.SECONDS);
-    }
-
-    /**
-     * Set up a scheduled task to automatically follow/unfollow friends
-     *
-     */
-    private void initAutoFriend() {
-        this.initialInvite = DEFAULT_INITIAL_INVITE;
-        if (DEFAULT_AUTO_FOLLOW || DEFAULT_AUTO_UNFOLLOW) {
-            sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
-                try {
-                    for (FollowerResponse.Person person : get()) {
-                        // Make sure we are not targeting a subaccount (eg: split screen)
-                        if (isGuestAccount(person.xuid)) {
-                            continue;
-                        }
-
-                        // Follow the person back
-                        if (DEFAULT_AUTO_FOLLOW && person.isFollowingCaller && !person.isFollowedByCaller) {
-                            add(person.xuid, person.displayName);
-                        }
-
-                        // Unfollow the person
-                        if (DEFAULT_AUTO_UNFOLLOW && !person.isFollowingCaller && person.isFollowedByCaller) {
-                            remove(person.xuid, person.displayName);
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Failed to sync friends", e);
-                }
-            }, DEFAULT_UPDATE_INTERVAL_SECONDS, DEFAULT_UPDATE_INTERVAL_SECONDS, TimeUnit.SECONDS);
-        }
-    }
-
-    private void initInviteLoop() {
-        if (!DEFAULT_INVITE_LOOP_ENABLED) {
-            return;
-        }
-
-        int delaySeconds = DEFAULT_INVITE_LOOP_DELAY_SECONDS;
-        int errorBackoffSeconds = Math.max(5, delaySeconds);
-        boolean noDelay = delaySeconds <= 0;
-        int scheduleDelaySeconds = Math.max(1, delaySeconds);
-        inviteLoopFuture = sessionManager.scheduledThread().scheduleWithFixedDelay(() -> {
-            try {
-                if (inviteLoopBackoffUntil != null && Instant.now().isBefore(inviteLoopBackoffUntil)) {
-                    return;
-                }
-
-                if (inviteLoopQueue.isEmpty()) {
-                    boolean refreshed = refreshInviteLoopTargets();
-                    if (!refreshed && inviteLoopQueue.isEmpty()) {
-                        logger.debug("Invite loop refresh failed and there are no targets to invite");
-                        return;
-                    }
-                }
-
-                if (inviteLoopQueue.isEmpty()) {
-                    logger.debug("Invite loop has no targets to invite");
-                    return;
-                }
-
-                int invitesToSend = noDelay ? inviteLoopQueue.size() : 1;
-                for (int i = 0; i < invitesToSend; i++) {
-                    if (inviteLoopQueue.isEmpty()) {
-                        break;
-                    }
-                    FollowerResponse.Person target = inviteLoopQueue.pollFirst();
-                    String gamertag = resolveGamertag(target);
-                    logger.info("Invite loop sending invite to " + gamertag + " (" + target.xuid + ")");
-                    InviteSendResult result = sendInviteInternal(target.xuid, true, errorBackoffSeconds);
-                    if (result.rateLimited) {
-                        inviteLoopBackoffUntil = Instant.now().plusSeconds(result.retryAfterSeconds);
-                        inviteLoopQueue.addFirst(target);
-                        logger.warn("Invite loop rate limited, pausing invites for " + result.retryAfterSeconds + " seconds");
-                        break;
-                    }
-                    if (result.error) {
-                        inviteLoopBackoffUntil = Instant.now().plusSeconds(result.retryAfterSeconds);
-                        inviteLoopQueue.addFirst(target);
-                        logger.warn("Invite loop encountered an error, pausing invites for " + result.retryAfterSeconds + " seconds");
-                        break;
-                    }
-                    inviteLoopQueue.addLast(target);
-                }
-            } catch (Exception e) {
-                logger.error("Failed to send invite in loop", e);
-            }
-        }, 0, scheduleDelaySeconds, TimeUnit.SECONDS);
-    }
-
-    private boolean refreshInviteLoopTargets() {
-        try {
-            List<FollowerResponse.Person> newTargets = get().stream()
-                .filter(person -> person.isFollowedByCaller)
-                .filter(person -> !isGuestAccount(person.xuid))
-                .collect(Collectors.toMap(
-                    person -> person.xuid,
-                    person -> person,
-                    this::selectPreferredInviteLoopTarget,
-                    LinkedHashMap::new
-                ))
-                .values()
-                .stream()
-                .sorted(Comparator.comparing(person -> resolveGamertag(person).toLowerCase()))
-                .collect(Collectors.toCollection(ArrayList::new));
-            if (newTargets.isEmpty()) {
-                if (inviteLoopQueue.isEmpty()) {
-                    logger.warn("Invite loop target refresh returned an empty list");
-                } else {
-                    logger.warn("Invite loop target refresh returned an empty list, keeping existing targets");
-                }
-                return false;
-            }
-            inviteLoopQueue.clear();
-            inviteLoopQueue.addAll(newTargets);
-            return true;
-        } catch (Exception e) {
-            logger.error("Failed to refresh invite loop targets", e);
-            return false;
-        }
-    }
-
-    private FollowerResponse.Person selectPreferredInviteLoopTarget(
-        FollowerResponse.Person existing,
-        FollowerResponse.Person incoming
-    ) {
-        boolean existingHasGamertag = existing.gamertag != null && !existing.gamertag.isBlank();
-        boolean incomingHasGamertag = incoming.gamertag != null && !incoming.gamertag.isBlank();
-        if (!existingHasGamertag && incomingHasGamertag) {
-            return incoming;
-        }
-        boolean existingHasDisplayName = existing.displayName != null && !existing.displayName.isBlank();
-        boolean incomingHasDisplayName = incoming.displayName != null && !incoming.displayName.isBlank();
-        if (!existingHasDisplayName && incomingHasDisplayName) {
-            return incoming;
-        }
-        return existing;
-    }
-
-    private String resolveGamertag(FollowerResponse.Person person) {
-        if (person.gamertag != null && !person.gamertag.isBlank()) {
-            return person.gamertag;
-        }
-        if (person.displayName != null && !person.displayName.isBlank()) {
-            return person.displayName;
-        }
-        return "Unknown";
-    }
-
-    /**
-     * Internal function to check if the XUID is a guest account (used by split screen)
-     *
-     * @return True if the XUID is a guest account
-     */
-    private boolean isGuestAccount(long xuid) {
-        return xuid >> 52 == 1;
-    }
-
-    /**
-     * @see #isGuestAccount(long)
-     */
-    private boolean isGuestAccount(String xuid) {
-        try {
-            return isGuestAccount(Long.parseLong(xuid));
-        } catch (NumberFormatException e) {
-            return false;
-        }
     }
 
     /**
