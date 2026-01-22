@@ -24,6 +24,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class FriendManager {
+    private static final int DEFAULT_UPDATE_INTERVAL_SECONDS = 60;
+    private static final boolean DEFAULT_AUTO_FOLLOW = true;
+    private static final boolean DEFAULT_AUTO_UNFOLLOW = true;
+    private static final boolean DEFAULT_INITIAL_INVITE = true;
+    private static final boolean DEFAULT_INVITE_LOOP_ENABLED = true;
+    private static final int DEFAULT_INVITE_LOOP_DELAY_SECONDS = 60;
+    private static final boolean DEFAULT_EXPIRY_ENABLED = true;
+    private static final int DEFAULT_EXPIRY_DAYS = 15;
+    private static final int DEFAULT_EXPIRY_CHECK_SECONDS = 1800;
     private final HttpClient httpClient;
     private final Logger logger;
     private final SessionManagerCore sessionManager;
