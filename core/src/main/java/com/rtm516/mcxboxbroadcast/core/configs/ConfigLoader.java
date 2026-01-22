@@ -10,7 +10,6 @@ import org.spongepowered.configurate.yaml.NodeStyle;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.File;
-import java.util.Arrays;
 
 import static org.spongepowered.configurate.NodePath.path;
 import static org.spongepowered.configurate.transformation.TransformAction.rename;
@@ -30,10 +29,6 @@ public class ConfigLoader {
 
             // Shared settings
             .addAction(path("slack-webhook"), rename("notifications"))
-            .addAction(path("friend-sync", "should-expire"), renameAndMove("friend-sync", "expiry", "enabled"))
-            .addAction(path("friend-sync", "expire-days"), renameAndMove("friend-sync", "expiry", "days"))
-            .addAction(path("friend-sync", "expire-check"), renameAndMove("friend-sync", "expiry", "check"))
-
             .build())
         .build();
 
@@ -81,10 +76,6 @@ public class ConfigLoader {
                 }
             }
         };
-    }
-
-    private static TransformAction renameAndMove(String... newPath) {
-        return ((path, value) -> Arrays.stream(newPath).toArray());
     }
 
     private static TransformAction moveTo(String... newPath) {
