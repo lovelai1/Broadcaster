@@ -195,7 +195,7 @@ public class MCXboxBroadcastExtension implements Extension {
             }
 
             sessionInfo.setHostName(getConfiguredHostName(hostName));
-            sessionInfo.setWorldName(this.geyserApi().bedrockListener().primaryMotd());
+            sessionInfo.setWorldName(getConfiguredWorldName(this.geyserApi().bedrockListener().primaryMotd()));
             sessionInfo.setPlayers(getConfiguredPlayers(this.geyserApi().onlineConnections().size()));
             sessionInfo.setMaxPlayers(getConfiguredMaxPlayers(GeyserImpl.getInstance().config().motd().maxPlayers())); // TODO Find API equivalent
 
@@ -225,7 +225,7 @@ public class MCXboxBroadcastExtension implements Extension {
 
         // Allows support for motd and player count passthrough
         sessionInfo.setHostName(getConfiguredHostName(hostName));
-        sessionInfo.setWorldName(event.primaryMotd());
+        sessionInfo.setWorldName(getConfiguredWorldName(event.primaryMotd()));
 
         sessionInfo.setPlayers(getConfiguredPlayers(event.playerCount()));
         sessionInfo.setMaxPlayers(getConfiguredMaxPlayers(event.maxPlayerCount()));
@@ -239,6 +239,15 @@ public class MCXboxBroadcastExtension implements Extension {
         }
 
         return fallbackHostName;
+    }
+
+    private String getConfiguredWorldName(String fallbackWorldName) {
+        CoreConfig.SessionConfig.ExtensionOverrides overrides = config.session().extensionOverrides();
+        if (overrides.enabled() && !overrides.worldName().isBlank()) {
+            return overrides.worldName();
+        }
+
+        return fallbackWorldName;
     }
 
     private int getConfiguredPlayers(int fallbackPlayers) {

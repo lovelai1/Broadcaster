@@ -117,9 +117,13 @@ public interface CoreConfig {
             @DefaultBoolean(false)
             boolean enabled();
 
-            @Comment("The server name to broadcast")
+            @Comment("The host name to broadcast")
             @DefaultString("")
             String hostName();
+
+            @Comment("The world/server name to broadcast")
+            @DefaultString("")
+            String worldName();
 
             @Comment("The current number of players to broadcast")
             @DefaultNumeric(-1)
