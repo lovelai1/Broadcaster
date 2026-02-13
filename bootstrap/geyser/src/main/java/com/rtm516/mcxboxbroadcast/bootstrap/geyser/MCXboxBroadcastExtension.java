@@ -189,15 +189,15 @@ public class MCXboxBroadcastExtension implements Extension {
 
             // Create the session information based on the Geyser config
             sessionInfo = new SessionInfo();
-            sessionInfo.setHostName(this.geyserApi().bedrockListener().secondaryMotd());
-            sessionInfo.setWorldName(this.geyserApi().bedrockListener().primaryMotd());
-            sessionInfo.setPlayers(this.geyserApi().onlineConnections().size());
-            sessionInfo.setMaxPlayers(GeyserImpl.getInstance().config().motd().maxPlayers()); // TODO Find API equivalent
-
-            // Fallback to the gamertag if the host name is empty
-            if (sessionInfo.getHostName().isEmpty()) {
-                sessionInfo.setHostName(sessionManager.getGamertag());
+            String hostName = this.geyserApi().bedrockListener().secondaryMotd();
+            if (hostName == null || hostName.isEmpty()) {
+                hostName = sessionManager.getGamertag();
             }
+
+            sessionInfo.setHostName(getConfiguredHostName(hostName));
+            sessionInfo.setWorldName(getConfiguredWorldName(this.geyserApi().bedrockListener().primaryMotd()));
+            sessionInfo.setPlayers(getConfiguredPlayers(this.geyserApi().onlineConnections().size()));
+            sessionInfo.setMaxPlayers(getConfiguredMaxPlayers(GeyserImpl.getInstance().config().motd().maxPlayers())); // TODO Find API equivalent
 
             sessionInfo.setIp(ip);
             sessionInfo.setPort(port);
@@ -224,18 +224,49 @@ public class MCXboxBroadcastExtension implements Extension {
         }
 
         // Allows support for motd and player count passthrough
-        sessionInfo.setHostName(hostName);
-        sessionInfo.setWorldName(event.primaryMotd());
-        
-        sessionInfo.setPlayers(event.playerCount());
-        sessionInfo.setMaxPlayers(event.maxPlayerCount());
+        sessionInfo.setHostName(getConfiguredHostName(hostName));
+        sessionInfo.setWorldName(getConfiguredWorldName(event.primaryMotd()));
 
-        // Fallback to the gamertag if the host name is empty
-        if (sessionInfo.getHostName().isEmpty()) {
-            sessionInfo.setHostName(sessionManager.getGamertag());
-        }
+        sessionInfo.setPlayers(getConfiguredPlayers(event.playerCount()));
+        sessionInfo.setMaxPlayers(getConfiguredMaxPlayers(event.maxPlayerCount()));
     }
 
+
+    private String getConfiguredHostName(String fallbackHostName) {
+        CoreConfig.SessionConfig.ExtensionOverrides overrides = config.session().extensionOverrides();
+        if (overrides.enabled() && !overrides.hostName().isBlank()) {
+            return overrides.hostName();
+        }
+
+        return fallbackHostName;
+    }
+
+    private String getConfiguredWorldName(String fallbackWorldName) {
+        CoreConfig.SessionConfig.ExtensionOverrides overrides = config.session().extensionOverrides();
+        if (overrides.enabled() && !overrides.worldName().isBlank()) {
+            return overrides.worldName();
+        }
+
+        return fallbackWorldName;
+    }
+
+    private int getConfiguredPlayers(int fallbackPlayers) {
+        CoreConfig.SessionConfig.ExtensionOverrides overrides = config.session().extensionOverrides();
+        if (overrides.enabled() && overrides.players() >= 0) {
+            return overrides.players();
+        }
+
+        return fallbackPlayers;
+    }
+
+    private int getConfiguredMaxPlayers(int fallbackMaxPlayers) {
+        CoreConfig.SessionConfig.ExtensionOverrides overrides = config.session().extensionOverrides();
+        if (overrides.enabled() && overrides.maxPlayers() >= 0) {
+            return overrides.maxPlayers();
+        }
+
+        return fallbackMaxPlayers;
+    }
 
     private void createSession() {
         // Create the Xbox session
