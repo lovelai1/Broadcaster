@@ -52,12 +52,6 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     protected void updateSession() throws SessionUpdateException {
-        super.updateSessionInternal(
-            Constants.JOIN_SESSION.formatted(parent.sessionInfo().getHandleId()),
-            // Advertise the sub-account as the member identity, but keep the
-            // parent connection ID so players can actually join through the
-            // active primary session transport.
-            new JoinSessionRequest(getXuid(), parent.sessionInfo().getConnectionId(), true)
-        );
+        super.updateSessionInternal(Constants.JOIN_SESSION.formatted(parent.sessionInfo().getHandleId()), new JoinSessionRequest(parent.sessionInfo()));
     }
 }
