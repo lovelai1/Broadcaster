@@ -1,6 +1,7 @@
 package com.rtm516.mcxboxbroadcast.core;
 
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
+import com.rtm516.mcxboxbroadcast.core.models.session.CreateSessionRequest;
 import com.rtm516.mcxboxbroadcast.core.models.session.JoinSessionRequest;
 import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
 import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
@@ -12,6 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
  */
 public class SubSessionManager extends SessionManagerCore {
     private final SessionManager parent;
+    private final boolean independentSession;
 
     /**
      * Create a new session manager for a sub-session
@@ -22,9 +24,14 @@ public class SubSessionManager extends SessionManagerCore {
      * @param notificationManager The notification manager to use for sending messages
      * @param logger The logger to use for outputting messages
      */
-    public SubSessionManager(String id, SessionManager parent, StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
+    public SubSessionManager(String id, SessionManager parent, boolean independentSession, StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
         super(storageManager, notificationManager, logger.prefixed("Sub-Session " + id));
         this.parent = parent;
+        this.independentSession = independentSession;
+
+        if (this.independentSession) {
+            this.sessionInfo = new ExpandedSessionInfo("", "", parent.sessionInfo().copy());
+        }
     }
 
     @Override
@@ -34,11 +41,19 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     public String getSessionId() {
+        if (independentSession) {
+            return sessionInfo.getSessionId();
+        }
+
         return parent.sessionInfo().getSessionId();
     }
 
     @Override
     protected boolean handleFriendship() {
+        if (independentSession) {
+            return false;
+        }
+
         // TODO Some form of force flag just in case the master friends list is full
 
         // Add the main account
@@ -52,6 +67,16 @@ public class SubSessionManager extends SessionManagerCore {
 
     @Override
     protected void updateSession() throws SessionUpdateException {
+        if (independentSession) {
+            this.sessionInfo.updateSessionInfo(parent.sessionInfo());
+            super.updateSessionInternal(Constants.CREATE_SESSION.formatted(this.sessionInfo.getSessionId()), new CreateSessionRequest(this.sessionInfo));
+            return;
+        }
+
+        if (parent.sessionInfo().getHandleId() == null || parent.sessionInfo().getHandleId().isBlank()) {
+            throw new SessionUpdateException("Primary session handle is not ready yet");
+        }
+
         super.updateSessionInternal(Constants.JOIN_SESSION.formatted(parent.sessionInfo().getHandleId()), new JoinSessionRequest(parent.sessionInfo()));
     }
 }

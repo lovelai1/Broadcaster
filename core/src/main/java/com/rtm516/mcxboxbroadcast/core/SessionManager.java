@@ -26,10 +26,13 @@ import java.util.concurrent.ScheduledExecutorService;
  * Simple manager to authenticate and create sessions on Xbox
  */
 public class SessionManager extends SessionManagerCore {
+    private static final int MAX_ACTIVE_SUB_SESSIONS = 29; // Xbox session member limit is 30 including primary
+
     private final ScheduledExecutorService scheduledThreadPool;
     private final Map<String, SubSessionManager> subSessionManagers;
 
     private CoreConfig.FriendSyncConfig friendSyncConfig;
+    private boolean independentSubSessions;
     private Runnable restartCallback;
 
     /**
@@ -72,7 +75,7 @@ public class SessionManager extends SessionManagerCore {
      * @throws SessionCreationException If the session failed to create either because it already exists or some other reason
      * @throws SessionUpdateException   If the session data couldn't be set due to some issue
      */
-    public void init(SessionInfo sessionInfo, CoreConfig.FriendSyncConfig friendSyncConfig) throws SessionCreationException, SessionUpdateException {
+    public void init(SessionInfo sessionInfo, CoreConfig.FriendSyncConfig friendSyncConfig, boolean independentSubSessions) throws SessionCreationException, SessionUpdateException {
         // Set the internal session information based on the session info
         this.sessionInfo = new ExpandedSessionInfo("", "", sessionInfo);
 
@@ -80,6 +83,7 @@ public class SessionManager extends SessionManagerCore {
 
         // Set up the auto friend sync
         this.friendSyncConfig = friendSyncConfig;
+        this.independentSubSessions = independentSubSessions;
         friendManager().init(this.friendSyncConfig);
 
         // Load sub-sessions from cache
@@ -96,8 +100,13 @@ public class SessionManager extends SessionManagerCore {
         scheduledThreadPool.execute(() -> {
             // Create the sub-session manager for each sub-session
             for (String subSession : finalSubSessions) {
+                if (!independentSubSessions && subSessionManagers.size() >= MAX_ACTIVE_SUB_SESSIONS) {
+                    logger.warn("Skipping sub-session " + subSession + " because only " + MAX_ACTIVE_SUB_SESSIONS + " sub-sessions can be active at once");
+                    continue;
+                }
+
                 try {
-                    SubSessionManager subSessionManager = new SubSessionManager(subSession, this, storageManager().subSession(subSession), notificationManager(), logger);
+                    SubSessionManager subSessionManager = new SubSessionManager(subSession, this, this.independentSubSessions, storageManager().subSession(subSession), notificationManager(), logger);
                     subSessionManager.init();
                     subSessionManager.friendManager().init(this.friendSyncConfig);
                     subSessionManagers.put(subSession, subSessionManager);
@@ -199,9 +208,14 @@ public class SessionManager extends SessionManagerCore {
             return;
         }
 
+        if (!independentSubSessions && subSessionManagers.size() >= MAX_ACTIVE_SUB_SESSIONS) {
+            coreLogger.error("Cannot add sub-session: Xbox only allows " + MAX_ACTIVE_SUB_SESSIONS + " active sub-sessions per primary session");
+            return;
+        }
+
         // Create the sub-session manager
         try {
-            SubSessionManager subSessionManager = new SubSessionManager(id, this, storageManager().subSession(id), notificationManager(), logger);
+            SubSessionManager subSessionManager = new SubSessionManager(id, this, this.independentSubSessions, storageManager().subSession(id), notificationManager(), logger);
             subSessionManager.init();
             subSessionManager.friendManager().init(friendSyncConfig);
             subSessionManagers.put(id, subSessionManager);

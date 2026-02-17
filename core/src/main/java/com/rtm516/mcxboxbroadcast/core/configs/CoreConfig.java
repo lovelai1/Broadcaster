@@ -63,6 +63,10 @@ public interface CoreConfig {
         @DefaultBoolean(true)
         boolean queryServer();
 
+        @Comment("If true, sub-sessions create their own Xbox sessions instead of joining the primary one")
+        @DefaultBoolean(false)
+        boolean independentSubSessions();
+
         @Comment("""
             This uses checker.geysermc.org for querying if the native ping fails
             This can be useful in the case of docker networks or routing problems causing the native ping to fail""")
