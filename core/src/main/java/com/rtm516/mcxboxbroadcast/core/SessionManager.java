@@ -35,6 +35,8 @@ public class SessionManager extends SessionManagerCore {
     private boolean independentSubSessions;
     private Runnable restartCallback;
 
+    private volatile boolean friendSyncInitialized;
+
     /**
      * Create an instance of SessionManager
      *
@@ -81,10 +83,9 @@ public class SessionManager extends SessionManagerCore {
 
         super.init();
 
-        // Set up the auto friend sync
+        // Save auto friend sync config. It will be initialized once all startup accounts are online.
         this.friendSyncConfig = friendSyncConfig;
         this.independentSubSessions = independentSubSessions;
-        friendManager().init(this.friendSyncConfig);
 
         // Load sub-sessions from cache
         List<String> subSessions = new ArrayList<>();
@@ -108,14 +109,19 @@ public class SessionManager extends SessionManagerCore {
                 try {
                     SubSessionManager subSessionManager = new SubSessionManager(subSession, this, this.independentSubSessions, storageManager().subSession(subSession), notificationManager(), logger);
                     subSessionManager.init();
-                    subSessionManager.friendManager().init(this.friendSyncConfig);
                     subSessionManagers.put(subSession, subSessionManager);
                 } catch (SessionCreationException | SessionUpdateException e) {
                     logger.error("Failed to create sub-session " + subSession, e);
                     // TODO Retry creation after 30s or so
                 }
             }
+
+            initFriendSyncWhenReady();
         });
+
+        if (finalSubSessions.isEmpty()) {
+            initFriendSyncWhenReady();
+        }
     }
 
     @Override
@@ -217,8 +223,12 @@ public class SessionManager extends SessionManagerCore {
         try {
             SubSessionManager subSessionManager = new SubSessionManager(id, this, this.independentSubSessions, storageManager().subSession(id), notificationManager(), logger);
             subSessionManager.init();
-            subSessionManager.friendManager().init(friendSyncConfig);
             subSessionManagers.put(id, subSessionManager);
+
+            // Friend sync has already started for existing sessions, so initialize it for this new session.
+            if (friendSyncInitialized) {
+                subSessionManager.friendManager().init(friendSyncConfig);
+            }
         } catch (SessionCreationException | SessionUpdateException e) {
             coreLogger.error("Failed to create sub-session", e);
             return;
@@ -263,6 +273,22 @@ public class SessionManager extends SessionManagerCore {
         }
 
         coreLogger.info("Removed sub-session with ID " + id);
+    }
+
+    /**
+     * Initialize friend sync after all startup sessions are loaded and broadcasting.
+     */
+    private synchronized void initFriendSyncWhenReady() {
+        if (friendSyncInitialized) {
+            return;
+        }
+
+        friendManager().init(friendSyncConfig);
+        for (SubSessionManager subSessionManager : subSessionManagers.values()) {
+            subSessionManager.friendManager().init(friendSyncConfig);
+        }
+
+        friendSyncInitialized = true;
     }
 
     /**
