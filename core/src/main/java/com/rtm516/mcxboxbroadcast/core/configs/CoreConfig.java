@@ -79,6 +79,10 @@ public interface CoreConfig {
         @ExcludePlatform(platforms = {"Extension"})
         SessionInfo sessionInfo();
 
+        @Comment("Override broadcast values in the extension")
+        @ExcludePlatform(platforms = {"Standalone"})
+        ExtensionOverrides extensionOverrides();
+
         @ConfigSerializable
         interface SessionInfo {
             @Comment("The host name to broadcast")
@@ -105,6 +109,29 @@ public interface CoreConfig {
             @DefaultNumeric(19132)
             @NumericRange(from = 1, to = 65535)
             int port();
+        }
+
+        @ConfigSerializable
+        interface ExtensionOverrides {
+            @Comment("Enable manual override values instead of passthrough values from Geyser")
+            @DefaultBoolean(false)
+            boolean enabled();
+
+            @Comment("The host name to broadcast")
+            @DefaultString("")
+            String hostName();
+
+            @Comment("The world/server name to broadcast")
+            @DefaultString("")
+            String worldName();
+
+            @Comment("The current number of players to broadcast")
+            @DefaultNumeric(-1)
+            int players();
+
+            @Comment("The maximum number of players to broadcast")
+            @DefaultNumeric(-1)
+            int maxPlayers();
         }
     }
 
